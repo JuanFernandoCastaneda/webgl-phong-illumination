@@ -119,44 +119,25 @@ function main() {
     gl.uniformMatrix4fv(mViewUniformLoc, false, viewMatrix);
     gl.uniformMatrix4fv(mProjectionUniformLoc, false, projectionMatrix);
 
-    const vertexNormals = [
-        // Atrás
-        0, 0, -1,
-        0, 0, -1,
-        0, 0, -1,
-        0, 0, -1,
+    const calidaCilindro = 10;
 
-        // Frente
-        0, 0, 1,
-        0, 0, 1,
-        0, 0, 1,
-        0, 0, 1,
+    var polygonVertices = [...createPolygonVertices(calidaCilindro*2, [0, 0, 0])];
 
-        // Abajo
-        0, -1, 0,
-        0, -1, 0,
-        0, -1, 0,
-        0, -1, 0,
+    const vertexNormals = [];
+    for(let i = 0; i < polygonVertices.length/6; i++) {
+        const vector = [polygonVertices[i*6], polygonVertices[i*6+1]+0.5, polygonVertices[i*6+2]];
+        const normalizedVector = normalize(vector);
+        vertexNormals.push(...normalizedVector);
+    }
 
-        // Arriba
-        0, 1, 0,
-        0, 1, 0,
-        0, 1, 0,
-        0, 1, 0,
-
-        // Derecha
-        1, 0, 0,
-        1, 0, 0,
-        1, 0, 0,
-        1, 0, 0,
-
-        // Izq
-        -1, 0, 0,
-        -1, 0, 0,
-        -1, 0, 0,
-        -1, 0, 0,
-    ];
-
+    for(let i = 0; i < polygonVertices.length/6; i++) {
+        const vector = [polygonVertices[i*6], polygonVertices[i*6+1]-0.5, polygonVertices[i*6+2]];
+        const normalizedVector = normalize(vector);
+        vertexNormals.push(...normalizedVector);
+    }
+    
+    console.log(polygonVertices);
+    console.log(vertexNormals.length);
     
     const normalBuffer = gl.createBuffer();
     gl.bindBuffer(gl.ARRAY_BUFFER, normalBuffer);
@@ -220,10 +201,10 @@ function main() {
     let period = 0;
     let identityMatrix = mat4.create();
 
-    const reactCube = new Cube([0.5, 0.5, 0.3]);
-    reactCube.translate(0, 0.5, 0);
+    const reactCube = new Cylinder(calidaCilindro, [0.5, 0.5, 0.3]);
+    console.log(reactCube.vertices);
 
-    const sun = new Cube2([1, 1, 0]);
+    const sun = new Cylinder(calidaCilindro, [1, 1, 0]);
     sun.scale(0.5, 0.5, 0.5);
 
     let yRotationMatrix = new Float32Array(16);
@@ -313,6 +294,14 @@ function loadTexture(gl, url) {
     return texture;
 }
 
+const normalize = (vector) => {
+    const squaredMagnitude = vector.reduce((previous, current) => {
+            return previous + current ** 2
+    }, 0)
+    const magnitude = Math.sqrt(squaredMagnitude) != 0 ? Math.sqrt(squaredMagnitude) : 1;
+    return vector.map(axis => axis/magnitude);
+}
+
 function isPowerOf2(value) {
     return value & (value - 1) === 0;
 }
@@ -321,7 +310,7 @@ function isPowerOf2(value) {
 // Creates a unitary polygon in XZ plane centered on 0, 0, 0 with a default color.
 const createPolygonVertices = (edges, color) => {
     // Each vertex has to be of size 8: X, Y, Z, Position/Direction, R, G, B, Alpha.
-    const vertices = new Array((1 + edges) * 8);
+    const vertices = new Array((1 + edges)*6);
     // Vertex 0
     vertices[0] = 0;
     vertices[1] = 0;
@@ -329,20 +318,16 @@ const createPolygonVertices = (edges, color) => {
     vertices[3] = 1;
     vertices[4] = color[0];
     vertices[5] = color[1];
-    vertices[6] = color[2];
-    vertices[7] = color[3];
     // Rest of circle.
     let currentAngle = 0;
     const angleIncrement = Math.round(Math.PI / edges * 10000) / 10000;
     for (let i = 0; i < edges; i++) {
-        vertices[(i + 1) * 8 + 0] = Math.cos(currentAngle);
-        vertices[(i + 1) * 8 + 1] = 0;
-        vertices[(i + 1) * 8 + 2] = Math.sin(currentAngle);
-        vertices[(i + 1) * 8 + 3] = 1;
-        vertices[(i + 1) * 8 + 4] = color[0];
-        vertices[(i + 1) * 8 + 5] = color[1];
-        vertices[(i + 1) * 8 + 6] = color[2];
-        vertices[(i + 1) * 8 + 7] = color[3];
+        vertices[(i+1)*6 + 0] = Math.cos(currentAngle);
+        vertices[(i+1)*6 + 1] = 0;
+        vertices[(i+1)*6 + 2] = Math.sin(currentAngle);
+        vertices[(i+1)*6 + 3] = 1;
+        vertices[(i+1)*6 + 4] = color[0];
+        vertices[(i+1)*6 + 5] = color[1];
         currentAngle += angleIncrement * 2;
     }
     return vertices;
@@ -369,10 +354,10 @@ class Figure3D {
     }
 
     translate(x, y, z) {
-        for (let i = 0; i < this.vertices.length / 8; i++) {
-            this.vertices[i * 8] += x;
-            this.vertices[i * 8 + 1] += y;
-            this.vertices[i * 8 + 2] += z;
+        for (let i = 0; i < this.vertices.length/6; i++) {
+            this.vertices[i*6] += x;
+            this.vertices[i*6 + 1] += y;
+            this.vertices[i*6 + 2] += z;
         }
     }
 
@@ -528,13 +513,13 @@ class Cylinder extends Figure3D {
         const cylinderIndices = (quality) => {
             // Toca iterar de a cada tres cuando es triangle strip.
             const basesIndices = (initialIndex, quality) => {
-                const indices = new Array(3 * quality + 2);
+                const indices = new Array(3*quality + 2);
                 // Solo se transforman los valores iniciales. No se modifican las propiedades
                 // del arreglo.
                 for (let i = 0; i < quality; i++) {
-                    indices[i * 3] = initialIndex
-                    indices[i * 3 + 1] = initialIndex + 2 * i + 1
-                    indices[i * 3 + 2] = initialIndex + 2 * i + 2
+                    indices[i*3] = initialIndex
+                    indices[i*3 + 1] = initialIndex + 2 * i + 1
+                    indices[i*3 + 2] = initialIndex + 2 * i + 2
                 }
                 indices[indices.length - 2] = initialIndex;
                 indices[indices.length - 1] = initialIndex + 1;
@@ -549,8 +534,8 @@ class Cylinder extends Figure3D {
                 //41, // Para que baje bien al otro punto.
                 const indices = new Array((quality * 2 + 1 - 3) * 2);
                 for (let i = 3; i < quality * 2 + 1; i++) {
-                    indices[(i - 3) * 2] = i + quality * 2 + 1;
-                    indices[(i - 3) * 2 + 1] = i;
+                    indices[(i-3)*2] = i + quality * 2 + 1;
+                    indices[(i-3)*2 + 1] = i;
                 }
                 return [2, quality * 2 + 2, quality * 2 + 3, 2, ...indices, quality * 2 + 2, 1, quality * 4 + 1];
             }
