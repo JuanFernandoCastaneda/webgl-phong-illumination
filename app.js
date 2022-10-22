@@ -62,15 +62,60 @@ function main() {
         gl_FragColor = vec4(texel.rgb * lightIntensity, texel.a);
     }`;
 
+    const vsTextGouraud = `
+    precision mediump float;
+    attribute vec3 vertPosition;
+    attribute vec2 vertTextureCoord;
+    attribute vec3 vertNormal;
+    varying vec3 fragNormal;
+    varying vec4 fragColor;
+    uniform mat4 mWorld;
+    uniform mat4 mView;
+    uniform mat4 mProjection;
+    uniform sampler2D sampler;
+
+    void main() {
+        vec3 ambientLightIntensity = vec3(0.2, 0.2, 0.2);
+        vec3 sunlightIntensity = vec3(0.9, 0.9, 0.9);
+        vec3 sunlightDirection = normalize(vec3(5.0, 0.0, 5.0));
+
+        vec4 texel = texture2D(sampler, vertTextureCoord);
+        
+        fragNormal = (mWorld * vec4(vertNormal, 0.0)).xyz;
+
+        vec3 lightIntensity = ambientLightIntensity + 
+            sunlightIntensity * max(dot(fragNormal, sunlightDirection), 0.0);
+        
+        fragColor = vec4(texel.rgb * lightIntensity, texel.a);
+        gl_Position = mProjection * mView * mWorld * vec4(vertPosition, 1.0);
+    }`;
+
+    // FRAGMENT SHADER
+    // Attributes of the pixels between the vertices.
+    // varying are not the inputs.
+    // the only output for the fs is the gl_FragColor.
+    // Second parameter is for passing non uniform color from vs to fs.
+    const fsTextGouraud = `
+    precision mediump float;
+    varying vec4 fragColor;
+
+    void main() {
+        gl_FragColor = fragColor;
+    }`;
+
     // Activate depth perception.
     gl.enable(gl.DEPTH_TEST);
 
     // Create shaders.
     const vertexShader = gl.createShader(gl.VERTEX_SHADER);
     const fragmentShader = gl.createShader(gl.FRAGMENT_SHADER);
+    const vertexShaderGouraud = gl.createShader(gl.VERTEX_SHADER);
+    const fragmentShaderGouraud = gl.createShader(gl.FRAGMENT_SHADER);
 
     gl.shaderSource(vertexShader, vsText);
     gl.shaderSource(fragmentShader, fsText);
+    gl.shaderSource(vertexShaderGouraud, vsTextGouraud);
+    gl.shaderSource(fragmentShaderGouraud, fsTextGouraud);
 
     gl.compileShader(vertexShader);
     if (!gl.getShaderParameter(vertexShader, gl.COMPILE_STATUS)) {
@@ -78,9 +123,21 @@ function main() {
         return;
     }
 
+    gl.compileShader(vertexShaderGouraud)
+    if (!gl.getShaderParameter(vertexShaderGouraud, gl.COMPILE_STATUS)) {
+        console.error("Error compiling vertex shader Gouraud", gl.getShaderInfoLog(vertexShader));
+        return;
+    }
+
     gl.compileShader(fragmentShader);
     if (!gl.getShaderParameter(fragmentShader, gl.COMPILE_STATUS)) {
         console.error("Error compiling fragment shader", gl.getShaderInfoLog(fragmentShader));
+        return;
+    }
+
+    gl.compileShader(fragmentShaderGouraud);
+    if (!gl.getShaderParameter(fragmentShaderGouraud, gl.COMPILE_STATUS)) {
+        console.error("Error compiling fragment shader Gouraud", gl.getShaderInfoLog(fragmentShader));
         return;
     }
 
@@ -103,95 +160,134 @@ function main() {
     // Tell WebGL which program should be active to allow the uniform settings. 
     gl.useProgram(program);
 
-    const mWorldUniformLoc = gl.getUniformLocation(program, "mWorld");
-    const mViewUniformLoc = gl.getUniformLocation(program, "mView");
-    const mProjectionUniformLoc = gl.getUniformLocation(program, "mProjection");
+    const program2 = gl.createProgram();
+    gl.attachShader(program2, vertexShaderGouraud);
+    gl.attachShader(program2, fragmentShaderGouraud);
+    gl.linkProgram(program2);
+    if (!gl.getProgramParameter(program2, gl.LINK_STATUS)) {
+        console.error("Error linking program 2", gl.getProgramInfoLog(program2));
+        return;
+    }
 
-    // Setting the initial values for the matrices that will change.
-    let worldMatrix = mat4.create();
+    // This is only made in debbug. It's expensive.
+    gl.validateProgram(program2);
+    if (!gl.getProgramParameter(program2, gl.VALIDATE_STATUS)) {
+        console.error("Error validating program 2", gl.getProgramInfoLog(program2));
+        return;
+    }
 
-    let viewMatrix = mat4.lookAt(mat4.create(), [0, 0, 12], [0, 0, 0], [0, 1, 0]);
-    let projectionMatrix = mat4.perspective(mat4.create(), glmat.toRadian(45),
-        canvas.width / canvas.height, 0.1, 1000.0);
-
-    // Modify the uniform values in the program.
-    gl.uniformMatrix4fv(mWorldUniformLoc, false, mat4.create());
-    gl.uniformMatrix4fv(mViewUniformLoc, false, viewMatrix);
-    gl.uniformMatrix4fv(mProjectionUniformLoc, false, projectionMatrix);
+    const cambiarButton = document.getElementById("cambiar");
+    const estamos = document.getElementById("estamos");
+    let gouraud = false;
+    cambiarButton.onclick = () => {
+        if (!gouraud) {
+            cambiarButton.innerText = "Cambiar a Phong";
+            estamos.innerText = "Estamos en Gouraud";
+            hacerMkadaPrograma(program2);
+        } else {
+            cambiarButton.innerText = "Cambiar a Gouraud";
+            estamos.innerText = "Estamos en Phong";
+            hacerMkadaPrograma(program);
+        }
+        gouraud = !gouraud;
+    };
 
     const calidaCilindro = 10;
+    let worldMatrix = mat4.create();
 
-    var polygonVertices = [...createPolygonVertices(calidaCilindro*2, [0, 0, 0])];
+    let mWorldUniformLoc = null;
+    let mViewUniformLoc = null;
+    let mProjectionUniformLoc = null;
+    let boxTexture = null;
 
-    const vertexNormals = [];
-    for(let i = 0; i < polygonVertices.length/6; i++) {
-        const vector = [polygonVertices[i*6], polygonVertices[i*6+1]+0.5, polygonVertices[i*6+2]];
-        const normalizedVector = normalize(vector);
-        vertexNormals.push(...normalizedVector);
+    hacerMkadaPrograma(program);
+
+    function hacerMkadaPrograma(program) {
+        gl.useProgram(program);
+        mWorldUniformLoc = gl.getUniformLocation(program, "mWorld");
+        mViewUniformLoc = gl.getUniformLocation(program, "mView");
+        mProjectionUniformLoc = gl.getUniformLocation(program, "mProjection");
+
+        // Setting the initial values for the matrices that will change.
+
+        let viewMatrix = mat4.lookAt(mat4.create(), [0, 0, 12], [0, 0, 0], [0, 1, 0]);
+        let projectionMatrix = mat4.perspective(mat4.create(), glmat.toRadian(45),
+            canvas.width / canvas.height, 0.1, 1000.0);
+
+        // Modify the uniform values in the program.
+        gl.uniformMatrix4fv(mWorldUniformLoc, false, mat4.create());
+        gl.uniformMatrix4fv(mViewUniformLoc, false, viewMatrix);
+        gl.uniformMatrix4fv(mProjectionUniformLoc, false, projectionMatrix);
+
+        var polygonVertices = [...createPolygonVertices(calidaCilindro * 2, [0, 0, 0])];
+
+        const vertexNormals = [];
+        for (let i = 0; i < polygonVertices.length / 6; i++) {
+            const vector = [polygonVertices[i * 6], polygonVertices[i * 6 + 1] + 0.5, polygonVertices[i * 6 + 2]];
+            const normalizedVector = normalize(vector);
+            vertexNormals.push(...normalizedVector);
+        }
+
+        for (let i = 0; i < polygonVertices.length / 6; i++) {
+            const vector = [polygonVertices[i * 6], polygonVertices[i * 6 + 1] - 0.5, polygonVertices[i * 6 + 2]];
+            const normalizedVector = normalize(vector);
+            vertexNormals.push(...normalizedVector);
+        }
+
+        const normalBuffer = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, normalBuffer);
+        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(vertexNormals), gl.STATIC_DRAW);
+        const normalAttribLocation = gl.getAttribLocation(program, "vertNormal");
+        gl.vertexAttribPointer(
+            normalAttribLocation,
+            3, gl.FLOAT,
+            gl.TRUE,
+            3 * Float32Array.BYTES_PER_ELEMENT,
+            0
+        );
+        gl.enableVertexAttribArray(normalAttribLocation);
+
+        const vertexBuffer = gl.createBuffer();
+        const indexBuffer = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, vertexBuffer);
+        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, indexBuffer);
+        const positionAttribLocation = gl.getAttribLocation(program, "vertPosition");
+        const textureCoordAttribLocation = gl.getAttribLocation(program, "vertTextureCoord");
+        // Binds the buffer currently bound to gl.ARRAY_BUFFER to a generic vertex attribute 
+        // of the current vertex buffer object and specifies its layout.
+        gl.vertexAttribPointer(
+            positionAttribLocation, //Attribute location.
+            4, // Number of elements per attribute.
+            gl.FLOAT, // Type of elements.
+            false, // Whether or not values are normalized (more on that later).
+            6 * Float32Array.BYTES_PER_ELEMENT, // Size of an individual vertex.
+            0 // Offset from the beginning of a single vertex to this attribute.
+        );
+        gl.vertexAttribPointer(
+            textureCoordAttribLocation, //Attribute location.
+            2, // Number of elements per attribute.
+            gl.FLOAT, // Type of elements.
+            false, // Whether or not values are normalized (more on that later).
+            6 * Float32Array.BYTES_PER_ELEMENT, // Size of an individual vertex.
+            4 * Float32Array.BYTES_PER_ELEMENT // Offset from the beginning of a single vertex to this attribute.
+        );
+        // Enable attribute for use.
+        gl.enableVertexAttribArray(positionAttribLocation);
+        gl.enableVertexAttribArray(textureCoordAttribLocation);
+
+        // Create texture
+        boxTexture = gl.createTexture();
+        gl.bindTexture(gl.TEXTURE_2D, boxTexture);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE,
+            document.getElementById('dofus'))
+
+        gl.bindTexture(gl.TEXTURE_2D, null);
     }
-
-    for(let i = 0; i < polygonVertices.length/6; i++) {
-        const vector = [polygonVertices[i*6], polygonVertices[i*6+1]-0.5, polygonVertices[i*6+2]];
-        const normalizedVector = normalize(vector);
-        vertexNormals.push(...normalizedVector);
-    }
-    
-    console.log(polygonVertices);
-    console.log(vertexNormals.length);
-    
-    const normalBuffer = gl.createBuffer();
-    gl.bindBuffer(gl.ARRAY_BUFFER, normalBuffer);
-    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(vertexNormals), gl.STATIC_DRAW);
-    const normalAttribLocation = gl.getAttribLocation(program, "vertNormal");
-    gl.vertexAttribPointer(
-        normalAttribLocation,
-        3, gl.FLOAT,
-        gl.TRUE,
-        3 * Float32Array.BYTES_PER_ELEMENT,
-        0
-    );
-    gl.enableVertexAttribArray(normalAttribLocation);
-
-    const vertexBuffer = gl.createBuffer();
-    const indexBuffer = gl.createBuffer();
-    gl.bindBuffer(gl.ARRAY_BUFFER, vertexBuffer);
-    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, indexBuffer);
-    const positionAttribLocation = gl.getAttribLocation(program, "vertPosition");
-    const textureCoordAttribLocation = gl.getAttribLocation(program, "vertTextureCoord");
-    // Binds the buffer currently bound to gl.ARRAY_BUFFER to a generic vertex attribute 
-    // of the current vertex buffer object and specifies its layout.
-    gl.vertexAttribPointer(
-        positionAttribLocation, //Attribute location.
-        4, // Number of elements per attribute.
-        gl.FLOAT, // Type of elements.
-        false, // Whether or not values are normalized (more on that later).
-        6 * Float32Array.BYTES_PER_ELEMENT, // Size of an individual vertex.
-        0 // Offset from the beginning of a single vertex to this attribute.
-    );
-    gl.vertexAttribPointer(
-        textureCoordAttribLocation, //Attribute location.
-        2, // Number of elements per attribute.
-        gl.FLOAT, // Type of elements.
-        false, // Whether or not values are normalized (more on that later).
-        6 * Float32Array.BYTES_PER_ELEMENT, // Size of an individual vertex.
-        4 * Float32Array.BYTES_PER_ELEMENT // Offset from the beginning of a single vertex to this attribute.
-    );
-    // Enable attribute for use.
-    gl.enableVertexAttribArray(positionAttribLocation);
-    gl.enableVertexAttribArray(textureCoordAttribLocation);
-
-    // Create texture
-    const boxTexture = gl.createTexture();
-    gl.bindTexture(gl.TEXTURE_2D, boxTexture);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE,
-        document.getElementById('dofus'))
-
-    gl.bindTexture(gl.TEXTURE_2D, null);
 
     // 
     // Main render loop.
@@ -202,9 +298,8 @@ function main() {
     let identityMatrix = mat4.create();
 
     const reactCube = new Cylinder(calidaCilindro, [0.5, 0.5, 0.3]);
-    console.log(reactCube.vertices);
 
-    const sun = new Cylinder(calidaCilindro, [1, 1, 0]);
+    const sun = new Cylinder(calidaCilindro, [0.5, 0.8, 0]);
     sun.scale(0.5, 0.5, 0.5);
 
     let yRotationMatrix = new Float32Array(16);
@@ -219,7 +314,7 @@ function main() {
         // 1, 1, 0
         mat4.rotate(yRotationMatrix, identityMatrix, period, [0, 1, 0]);
         mat4.rotate(xRotationMatrix, identityMatrix, period/10, [1, 0, 0]);
-		mat4.mul(worldMatrix, yRotationMatrix, xRotationMatrix);
+        mat4.mul(worldMatrix, yRotationMatrix, xRotationMatrix);
         gl.uniformMatrix4fv(mWorldUniformLoc, false, worldMatrix);
 
         // Setting up the color with which one's clears.
@@ -296,10 +391,10 @@ function loadTexture(gl, url) {
 
 const normalize = (vector) => {
     const squaredMagnitude = vector.reduce((previous, current) => {
-            return previous + current ** 2
+        return previous + current ** 2
     }, 0)
     const magnitude = Math.sqrt(squaredMagnitude) != 0 ? Math.sqrt(squaredMagnitude) : 1;
-    return vector.map(axis => axis/magnitude);
+    return vector.map(axis => axis / magnitude);
 }
 
 function isPowerOf2(value) {
@@ -310,7 +405,7 @@ function isPowerOf2(value) {
 // Creates a unitary polygon in XZ plane centered on 0, 0, 0 with a default color.
 const createPolygonVertices = (edges, color) => {
     // Each vertex has to be of size 8: X, Y, Z, Position/Direction, R, G, B, Alpha.
-    const vertices = new Array((1 + edges)*6);
+    const vertices = new Array((1 + edges) * 6);
     // Vertex 0
     vertices[0] = 0;
     vertices[1] = 0;
@@ -322,12 +417,12 @@ const createPolygonVertices = (edges, color) => {
     let currentAngle = 0;
     const angleIncrement = Math.round(Math.PI / edges * 10000) / 10000;
     for (let i = 0; i < edges; i++) {
-        vertices[(i+1)*6 + 0] = Math.cos(currentAngle);
-        vertices[(i+1)*6 + 1] = 0;
-        vertices[(i+1)*6 + 2] = Math.sin(currentAngle);
-        vertices[(i+1)*6 + 3] = 1;
-        vertices[(i+1)*6 + 4] = color[0];
-        vertices[(i+1)*6 + 5] = color[1];
+        vertices[(i + 1) * 6 + 0] = Math.cos(currentAngle);
+        vertices[(i + 1) * 6 + 1] = 0;
+        vertices[(i + 1) * 6 + 2] = Math.sin(currentAngle);
+        vertices[(i + 1) * 6 + 3] = 1;
+        vertices[(i + 1) * 6 + 4] = color[0];
+        vertices[(i + 1) * 6 + 5] = color[1];
         currentAngle += angleIncrement * 2;
     }
     return vertices;
@@ -354,18 +449,18 @@ class Figure3D {
     }
 
     translate(x, y, z) {
-        for (let i = 0; i < this.vertices.length/6; i++) {
-            this.vertices[i*6] += x;
-            this.vertices[i*6 + 1] += y;
-            this.vertices[i*6 + 2] += z;
+        for (let i = 0; i < this.vertices.length / 6; i++) {
+            this.vertices[i * 6] += x;
+            this.vertices[i * 6 + 1] += y;
+            this.vertices[i * 6 + 2] += z;
         }
     }
 
     scale = (x, y, z) => {
-        for (let i = 0; i < this.vertices.length/6; i++) {
-            this.vertices[i*6] *= x;
-            this.vertices[i*6 + 1] *= y;
-            this.vertices[i*6 + 2] *= z;
+        for (let i = 0; i < this.vertices.length / 6; i++) {
+            this.vertices[i * 6] *= x;
+            this.vertices[i * 6 + 1] *= y;
+            this.vertices[i * 6 + 2] *= z;
         }
     }
 
@@ -389,7 +484,7 @@ class Cube extends Figure3D {
         const t = texture[1];
         const vertices = [
             // Cara de atrás
-            0, 0, 0, 1, 0, 0, 
+            0, 0, 0, 1, 0, 0,
             1, 0, 0, 1, 0, 1,
             1, 1, 0, 1, 1, 1,
             0, 1, 0, 1, 1, 0,
@@ -403,7 +498,7 @@ class Cube extends Figure3D {
             // Cara de abajo
             0, 0, 0, 1, 0, 0,
             1, 0, 0, 1, 0, 1,
-            1, 0, 1, 1, 1, 1, 
+            1, 0, 1, 1, 1, 1,
             0, 0, 1, 1, 1, 0,
 
             // Cara de arriba
@@ -420,13 +515,13 @@ class Cube extends Figure3D {
 
             // Cara de la izquierda
             0.0, 0.0, 0.0, 1, 0, 0,
-            0.0, 0.0, 1.0, 1, 0, 1, 
-            0.0, 1.0, 1.0, 1, 1, 1, 
+            0.0, 0.0, 1.0, 1, 0, 1,
+            0.0, 1.0, 1.0, 1, 1, 1,
             0.0, 1.0, 0.0, 1, 1, 0,
         ]
         const indices = [...Array(6).keys()].reduce((previous, current) => {
-            previous.push(current*4, current*4 + 2, current*4 + 1,
-                current*4, current*4 + 2, current*4 + 3);
+            previous.push(current * 4, current * 4 + 2, current * 4 + 1,
+                current * 4, current * 4 + 2, current * 4 + 3);
             return previous;
         }, [])
         super(vertices, indices)
@@ -437,10 +532,10 @@ class Cube extends Figure3D {
     }
 
     translate(x, y, z) {
-        for (let i = 0; i < this.vertices.length/6; i++) {
-            this.vertices[i*6] += x;
-            this.vertices[i*6 + 1] += y;
-            this.vertices[i*6 + 2] += z;
+        for (let i = 0; i < this.vertices.length / 6; i++) {
+            this.vertices[i * 6] += x;
+            this.vertices[i * 6 + 1] += y;
+            this.vertices[i * 6 + 2] += z;
         }
     }
 }
@@ -451,7 +546,7 @@ class Cube2 extends Figure3D {
         const t = texture[1];
         const vertices = [
             // Cara de atrás
-            0, 0, 0, 1, 0.4, 0.3, 
+            0, 0, 0, 1, 0.4, 0.3,
             1, 0, 0, 1, 0.4, 0.3,
             1, 1, 0, 1, 0.4, 0.3,
             0, 1, 0, 1, 0.4, 0.3,
@@ -487,8 +582,8 @@ class Cube2 extends Figure3D {
             0.0, 1.0, 0.0, 1, 0.4, 0.3,
         ]
         const indices = [...Array(6).keys()].reduce((previous, current) => {
-            previous.push(current*4, current*4 + 2, current*4 + 1,
-                current*4, current*4 + 2, current*4 + 3);
+            previous.push(current * 4, current * 4 + 2, current * 4 + 1,
+                current * 4, current * 4 + 2, current * 4 + 3);
             return previous;
         }, [])
         super(vertices, indices)
@@ -499,10 +594,10 @@ class Cube2 extends Figure3D {
     }
 
     translate(x, y, z) {
-        for (let i = 0; i < this.vertices.length/6; i++) {
-            this.vertices[i*6] += x;
-            this.vertices[i*6 + 1] += y;
-            this.vertices[i*6 + 2] += z;
+        for (let i = 0; i < this.vertices.length / 6; i++) {
+            this.vertices[i * 6] += x;
+            this.vertices[i * 6 + 1] += y;
+            this.vertices[i * 6 + 2] += z;
         }
     }
 }
@@ -513,13 +608,13 @@ class Cylinder extends Figure3D {
         const cylinderIndices = (quality) => {
             // Toca iterar de a cada tres cuando es triangle strip.
             const basesIndices = (initialIndex, quality) => {
-                const indices = new Array(3*quality + 2);
+                const indices = new Array(3 * quality + 2);
                 // Solo se transforman los valores iniciales. No se modifican las propiedades
                 // del arreglo.
                 for (let i = 0; i < quality; i++) {
-                    indices[i*3] = initialIndex
-                    indices[i*3 + 1] = initialIndex + 2 * i + 1
-                    indices[i*3 + 2] = initialIndex + 2 * i + 2
+                    indices[i * 3] = initialIndex
+                    indices[i * 3 + 1] = initialIndex + 2 * i + 1
+                    indices[i * 3 + 2] = initialIndex + 2 * i + 2
                 }
                 indices[indices.length - 2] = initialIndex;
                 indices[indices.length - 1] = initialIndex + 1;
@@ -534,8 +629,8 @@ class Cylinder extends Figure3D {
                 //41, // Para que baje bien al otro punto.
                 const indices = new Array((quality * 2 + 1 - 3) * 2);
                 for (let i = 3; i < quality * 2 + 1; i++) {
-                    indices[(i-3)*2] = i + quality * 2 + 1;
-                    indices[(i-3)*2 + 1] = i;
+                    indices[(i - 3) * 2] = i + quality * 2 + 1;
+                    indices[(i - 3) * 2 + 1] = i;
                 }
                 return [2, quality * 2 + 2, quality * 2 + 3, 2, ...indices, quality * 2 + 2, 1, quality * 4 + 1];
             }
